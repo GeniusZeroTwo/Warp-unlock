@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cloudflare WARP 管理工具
+# Cloudflare WARP 管理工具 (Optimized Version)
 # 功能：安装/配置 WARP IPv6（支持 WARP+）、卸载接口、卸载脚本、检测状态、自动检测异常重启、流媒体解锁检测
 # 接口名 warp，保留本地 IPv4，自动检测架构，支持开机自启，安装后自动注册 02 命令
 
@@ -9,8 +9,11 @@ SERVICE_NAME="warp-monitor.service"
 # 流媒体解锁监控服务名
 STREAM_SERVICE_NAME="warp-stream-monitor.service"
 # 统一设置 Netflix 新加坡独占影片 ID
-# 注意：此ID可能会随时间失效，建议定期检查
 NETFLIX_SG_ID="81215567"
+# 脚本自身的远程更新地址（用于本地快捷指令初始化）
+SCRIPT_URL="https://raw.githubusercontent.com/Geniusmmc/Warp-unlock/main/warp_manager.sh"
+# WARP 独立配置目录
+WGCF_DIR="/etc/wireguard/wgcf"
 
 # --- 辅助函数 ---
 
@@ -32,7 +35,7 @@ color_echo() {
     fi
 }
 
-# 检查 systemd 服务状态（内置，避免未定义报错）
+# 检查 systemd 服务状态
 check_service_status() {
     local service="$1"
     local name="$2"
@@ -101,8 +104,6 @@ check_warp_status() {
     echo "=============================="
 }
 
-
-
 # --- 菜单功能函数 ---
 
 # 显示菜单
@@ -126,7 +127,17 @@ show_menu() {
 # 安装/配置 WARP
 install_warp() {
     color_echo green "=== 更新系统并安装依赖 ==="
-    sudo apt update && sudo apt install -y curl wget net-tools wireguard-tools
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y curl wget net-tools wireguard-tools jq
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y epel-release
+        sudo yum install -y curl wget net-tools wireguard-tools jq
+    else
+        color_echo red "无法识别的包管理器，请手动安装 curl, wget, wireguard-tools, jq"
+        read -p "按回车返回菜单..."
+        return
+    fi
 
     color_echo green "=== 检测 CPU 架构 ==="
     ARCH=$(uname -m)
@@ -153,6 +164,10 @@ install_warp() {
     sudo mv wgcf /usr/local/bin/
 
     color_echo green "=== 注册 WARP 账户 ==="
+    # 规范化工作目录，避免配置文件散落在当前执行目录
+    sudo mkdir -p "$WGCF_DIR"
+    pushd "$WGCF_DIR" > /dev/null
+
     if [ ! -f wgcf-account.toml ]; then
         wgcf register --accept-tos
     fi
@@ -171,6 +186,8 @@ install_warp() {
     WARP_IPV4=$(grep '^Address' wgcf-profile.conf | grep -oP '\d+\.\d+\.\d+\.\d+/\d+')
     sed -i "s#0\.0\.0\.0/0#${WARP_IPV4}#g" wgcf-profile.conf
     sudo mv wgcf-profile.conf /etc/wireguard/warp.conf
+    
+    popd > /dev/null
 
     color_echo green "=== 启用 WireGuard 接口 warp ==="
     sudo wg-quick up warp
@@ -188,7 +205,7 @@ uninstall_warp_interface() {
     sudo wg-quick down warp 2>/dev/null || true
     sudo systemctl disable wg-quick@warp 2>/dev/null || true
     sudo rm -f /etc/wireguard/warp.conf
-    sudo rm -f wgcf-account.toml wgcf-profile.conf
+    sudo rm -rf "$WGCF_DIR"
     color_echo green "WARP 接口已卸载"
     read -p "按回车返回菜单..."
 }
@@ -197,8 +214,8 @@ uninstall_warp_interface() {
 uninstall_script() {
     color_echo red "=== 卸载脚本和快捷命令 ==="
     sudo rm -f /usr/local/bin/02
-    color_echo green "已删除 02 快捷命令"
-    echo "请手动删除此脚本文件。"
+    sudo rm -f /usr/local/bin/warp_manager.sh
+    color_echo green "已彻底删除 02 快捷命令和本地脚本文件"
     read -p "按回车返回菜单..."
 }
 
@@ -279,38 +296,38 @@ enable_stream_monitor() {
     sudo bash -c "cat > /usr/local/bin/warp-stream-monitor.sh" <<EOF
 #!/bin/bash
 # WARP 流媒体解锁检测脚本（所有请求通过 \$NIC 发出）
-IFACE="warp"  # WARP IPv6 网卡名
+IFACE="warp"
 UA_Browser="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-NIC="--interface \$IFACE"  # 可替换为代理参数，如 -x socks5://127.0.0.1:40000
+NIC="--interface \$IFACE"
 RETRY_COOLDOWN=10
 MAX_CONSEC_FAILS=10
 PAUSE_ON_MANY_FAILS=1800
 SLEEP_WHEN_UNLOCKED=1800
 LOG_PREFIX="[WARP-STREAM]"
 
-# Telegram 配置（由外部脚本写入）
+# Telegram 配置
 TG_ENABLED="${TG_ENABLED}"
 TG_TOKEN="${TG_TOKEN}"
 TG_CHAT_ID="${TG_CHAT_ID}"
 
-log() { echo "\$(date '+%F %T') ${LOG_PREFIX} \$*"; }
+# Cookie 缓存路径
+COOKIE_CACHE="/etc/wireguard/disney_cookies.txt"
+
+log() { echo "\$(date '+%F %T') \${LOG_PREFIX} \$*"; }
 
 tg_send() {
     if [[ "\$TG_ENABLED" != "yes" || -z "\$TG_TOKEN" || -z "\$TG_CHAT_ID" ]]; then
         return 0
     fi
     local text="\$1"
-    # 简单重试机制
     for i in 1 2 3; do
         curl -s -X POST "https://api.telegram.org/bot\$TG_TOKEN/sendMessage" -d chat_id="\$TG_CHAT_ID" -d text="\$text" >/dev/null 2>&1 && break
         sleep 1
     done
 }
 
-# 获取当前 WARP IPv6 出口地址
 get_ipv6() { curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 5 https://ip.gs || echo "不可用"; }
 
-# 检查 WARP IPv6 是否可用
 check_warp_ipv6() {
     local ip
     ip=\$(get_ipv6)
@@ -329,35 +346,22 @@ check_warp_ipv6() {
     return 0
 }
 
-# Netflix 检测 + 地区获取
 check_netflix() {
-    local sg_id="81215567"       # 非自制剧 ID
-    local original_id="80018499" # 自制剧 ID
-    local region_id="\$sg_id"     # 用于获取地区的影片 ID
+    local sg_id="81215567"
+    local original_id="80018499"
     local code_sg code_orig region
 
-    code_sg=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
-        --write-out "%{http_code}" --output /dev/null \
-        "https://www.netflix.com/title/\${sg_id}")
+    code_sg=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 --write-out "%{http_code}" --output /dev/null "https://www.netflix.com/title/\${sg_id}")
     if [ "\$code_sg" = "200" ]; then
-        # 获取地区代码
-        region=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
-            --write-out "%{redirect_url}" --output /dev/null \
-            "https://www.netflix.com/title/\${region_id}" \
-            | sed 's/.*com\/\([^\/-]\{2\}\).*/\1/' | tr '[:lower:]' '[:upper:]')
+        region=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 --write-out "%{redirect_url}" --output /dev/null "https://www.netflix.com/title/\${sg_id}" | sed 's/.*com\/\([^\/-]\{2\}\).*/\1/' | tr '[:lower:]' '[:upper:]')
         region=\${region:-"US"}
         echo "√(完整, \$region)"
         return 0
     fi
 
-    code_orig=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
-        --write-out "%{http_code}" --output /dev/null \
-        "https://www.netflix.com/title/\${original_id}")
+    code_orig=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 --write-out "%{http_code}" --output /dev/null "https://www.netflix.com/title/\${original_id}")
     if [ "\$code_orig" = "200" ]; then
-        region=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
-            --write-out "%{redirect_url}" --output /dev/null \
-            "https://www.netflix.com/title/\${original_id}" \
-            | sed 's/.*com\/\([^\/-]\{2\}\).*/\1/' | tr '[:lower:]' '[:upper:]')
+        region=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 --write-out "%{redirect_url}" --output /dev/null "https://www.netflix.com/title/\${original_id}" | sed 's/.*com\/\([^\/-]\{2\}\).*/\1/' | tr '[:lower:]' '[:upper:]')
         region=\${region:-"US"}
         echo "×(仅自制剧, \$region)"
         return 1
@@ -367,28 +371,29 @@ check_netflix() {
     return 1
 }
 
-# Disney+ 检测
-# Disney+ 检测（完整流程）
 check_disney() {
     local pre_assertion assertion pre_cookie disney_cookie token_content is_banned is_403
     local fake_content refresh_token disney_content tmp_result region in_supported
 
-    # 1. 模拟浏览器注册设备，获取 assertion
+    # 缓存 Disney Cookie
+    if [ ! -s "\$COOKIE_CACHE" ]; then
+        curl -fsL --max-time 10 "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/cookies" > "\$COOKIE_CACHE"
+    fi
+
     pre_assertion=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
         -X POST "https://disney.api.edge.bamgrid.com/devices" \
         -H "authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" \
         -H "content-type: application/json; charset=UTF-8" \
         -d '{"deviceFamily":"browser","applicationRuntime":"chrome","deviceProfile":"windows","attributes":{}}')
 
-    assertion=\$(echo "\$pre_assertion" | python3 -m json.tool 2>/dev/null | grep assertion | cut -f4 -d'"')
+    # 使用 jq 稳健解析 JSON
+    assertion=\$(echo "\$pre_assertion" | jq -r '.assertion // empty' 2>/dev/null)
     if [ -z "\$assertion" ]; then
         echo "×"
         return 1
     fi
 
-    # 2. 用 assertion 获取访问 token
-    pre_cookie=\$(curl -6 \$NIC -fsL --max-time 10 \
-        "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/cookies" | sed -n '1p')
+    pre_cookie=\$(sed -n '1p' "\$COOKIE_CACHE" 2>/dev/null)
     disney_cookie=\$(echo "\$pre_cookie" | sed "s/DISNEYASSERTION/\$assertion/g")
 
     token_content=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
@@ -396,18 +401,15 @@ check_disney() {
         -H "authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" \
         -d "\$disney_cookie")
 
-    # 3. 检查 token 是否被拒绝
-    is_banned=\$(echo "\$token_content" | python3 -m json.tool 2>/dev/null | grep 'forbidden-location')
+    is_banned=\$(echo "\$token_content" | grep 'forbidden-location')
     is_403=\$(echo "\$token_content" | grep '403 ERROR')
     if [ -n "\$is_banned\$is_403" ]; then
         echo "×"
         return 1
     fi
 
-    # 4. 用 refresh_token 调 GraphQL API 获取地区信息
-    fake_content=\$(curl -6 \$NIC -fsL --max-time 10 \
-        "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/cookies" | sed -n '8p')
-    refresh_token=\$(echo "\$token_content" | python3 -m json.tool 2>/dev/null | grep 'refresh_token' | awk '{print \$2}' | cut -f2 -d'"')
+    fake_content=\$(sed -n '8p' "\$COOKIE_CACHE" 2>/dev/null)
+    refresh_token=\$(echo "\$token_content" | jq -r '.refresh_token // empty' 2>/dev/null)
     disney_content=\$(echo "\$fake_content" | sed "s/ILOVEDISNEY/\$refresh_token/g")
 
     tmp_result=\$(curl -6 \$NIC -A "\$UA_Browser" -fsL --max-time 10 \
@@ -415,10 +417,10 @@ check_disney() {
         -H "authorization: ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" \
         -d "\$disney_content")
 
-    region=\$(echo "\$tmp_result" | python3 -m json.tool 2>/dev/null | grep 'countryCode' | cut -f4 -d'"')
-    in_supported=\$(echo "\$tmp_result" | python3 -m json.tool 2>/dev/null | grep 'inSupportedLocation' | awk '{print \$2}' | cut -f1 -d',')
+    # 深度遍历提取配置字段，完美兼容 JSON 层级变动
+    region=\$(echo "\$tmp_result" | jq -r '[.. | .countryCode? | select(type == "string")][0] // empty' 2>/dev/null)
+    in_supported=\$(echo "\$tmp_result" | jq -r '[.. | .inSupportedLocation? | select(type == "boolean")][0] // empty' 2>/dev/null)
 
-    # 5. 根据地区和支持状态判断是否解锁
     if [[ -n "\$region" && "\$in_supported" == "true" ]]; then
         echo "√(\$region)"
         return 0
@@ -427,7 +429,6 @@ check_disney() {
         return 1
     fi
 }
-
 
 fail_count=0
 while true; do
@@ -444,7 +445,6 @@ while true; do
     if [ \$nf_ok -ne 0 ] || [ \$ds_ok -ne 0 ]; then
         ((fail_count++))
         log "[IPv6: \$ipv6] ❌ 未解锁（Netflix: \$nf_status, Disney+: \$ds_status），连续失败 \${fail_count} 次 → 更换 WARP IP..."
-        # 首次失败或达到阈值时发送 Telegram 通知（如果启用）
         if [ "\$fail_count" -eq 1 ]; then
             tg_send "⚠️ WARP 未解锁：IPv6=\$ipv6 | Netflix=\$nf_status | Disney+=\$ds_status | 时间=\$(date '+%F %T')"
         fi
@@ -454,12 +454,13 @@ while true; do
         if [ "\$fail_count" -ge "\$MAX_CONSEC_FAILS" ]; then
             log "⚠️ 连续失败 \${MAX_CONSEC_FAILS} 次，暂停 \${PAUSE_ON_MANY_FAILS} 秒..."
             tg_send "🚨 WARP 连续未解锁已达 \${MAX_CONSEC_FAILS} 次，暂停 \${PAUSE_ON_MANY_FAILS} 秒后重试（IPv6=\$ipv6）"
+            # 若频繁失败重置下 Cookie 缓存，以防失效
+            rm -f "\$COOKIE_CACHE"
             sleep \$PAUSE_ON_MANY_FAILS
             fail_count=0
         fi
     else
         log "[IPv6: \$ipv6] ✅ 已解锁（Netflix: \$nf_status, Disney+: \$ds_status），\${SLEEP_WHEN_UNLOCKED} 秒后检测"
-        # 若之前有失败记录，可发送恢复通知（可选）
         if [ \$fail_count -gt 0 ]; then
             tg_send "✅ WARP 已解锁恢复：IPv6=\$ipv6 | Netflix=\$nf_status | Disney+=\$ds_status | 时间=\$(date '+%F %T')"
         fi
@@ -486,11 +487,10 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable --now $STREAM_SERVICE_NAME
 
-    color_echo green "流媒体解锁检测已开启（检测前会确认 WARP IPv6 可用，并显示 Netflix 地区）。未解锁将更换 IP，首次未解锁与达到连续失败阈值时会发送 Telegram 通知（如果已启用）。"
+    color_echo green "流媒体解锁检测已开启（检测前会确认 WARP IPv6 可用，并显示 Netflix 地区）。"
     echo "=== 实时日志（Ctrl+C 退出查看，服务继续后台运行） ==="
     sudo journalctl -u $STREAM_SERVICE_NAME -f -n 0
 }
-
 
 # 停止流媒体解锁检测
 disable_stream_monitor() {
@@ -505,17 +505,29 @@ disable_stream_monitor() {
 
 # --- 主逻辑 ---
 
+# 优先创建本地脚本备份，减少依赖网络拉取
+if [ ! -f /usr/local/bin/warp_manager.sh ]; then
+    if [[ -f "$0" ]]; then
+        sudo cp "$0" /usr/local/bin/warp_manager.sh
+    else
+        sudo curl -fsSL "$SCRIPT_URL" -o /usr/local/bin/warp_manager.sh
+    fi
+    sudo chmod +x /usr/local/bin/warp_manager.sh
+fi
+
 if [ ! -f /usr/local/bin/02 ]; then
     color_echo yellow "正在创建快捷命令 '02'..."
-    sudo bash -c "echo 'bash <(curl -fsSL https://raw.githubusercontent.com/Geniusmmc/Warp-unlock/main/warp_manager.sh)' > /usr/local/bin/02"
+    sudo bash -c "echo '#!/bin/bash' > /usr/local/bin/02"
+    sudo bash -c "echo 'bash /usr/local/bin/warp_manager.sh' >> /usr/local/bin/02"
     sudo chmod +x /usr/local/bin/02
-    color_echo green "快捷命令已创建，之后可直接输入 02 打开 WARP 管理菜单"
+    color_echo green "快捷命令已创建，之后可直接输入 02 打开 WARP 管理菜单（纯本地执行更快速）"
 fi
 
 if systemctl list-units --type=service | grep -q "$STREAM_SERVICE_NAME"; then
-    color_echo yellow "检测到 $STREAM_SERVICE_NAME 服务，正在重新加载并重启..."
-    sudo systemctl daemon-reload
-    sudo systemctl restart "$STREAM_SERVICE_NAME"
+    if systemctl is-active --quiet "$STREAM_SERVICE_NAME"; then
+        # 仅当后台存在检测进程变动时可选进行 reload
+        :
+    fi
 fi
 
 # 主循环
@@ -531,7 +543,7 @@ while true; do
         6) disable_auto_restart ;;
         7) enable_stream_monitor ;;
         8) disable_stream_monitor ;;
-        0) exit 0 ;;
+        0) clear; exit 0 ;;
         *) color_echo red "无效选项"; read -p "按回车返回菜单..." ;;
     esac
 done
