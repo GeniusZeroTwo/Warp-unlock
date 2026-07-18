@@ -539,6 +539,11 @@ fi
 color_echo yellow "正在配置快捷命令 '02'..."
 sudo tee /usr/local/bin/02 > /dev/null <<'EOF'
 #!/bin/bash
+if [ ! -f /usr/local/bin/warp_manager.sh ]; then
+    echo "本地未找到 warp_manager.sh，正在自动重新下载..."
+    curl -fsSL "https://raw.githubusercontent.com/Geniusmmc/Warp-unlock/main/warp_manager.sh" -o /usr/local/bin/warp_manager.sh
+    chmod +x /usr/local/bin/warp_manager.sh
+fi
 bash /usr/local/bin/warp_manager.sh
 EOF
 sudo chmod +x /usr/local/bin/02
