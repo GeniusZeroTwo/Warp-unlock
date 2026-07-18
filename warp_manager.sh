@@ -4,6 +4,13 @@
 # 接口名 warp，保留本地 IPv4，自动检测架构，支持开机自启，安装后自动注册 02 命令
 
 # --- 全局变量与常量 ---
+
+# 确保以 root 权限运行
+if [[ $EUID -ne 0 ]]; then
+    echo -e "\033[31m错误：此脚本需要 root 权限，请使用 sudo bash $0 运行。\033[0m"
+    exit 1
+fi
+
 # 标准 WARP 监控服务名
 SERVICE_NAME="warp-monitor.service"
 # 流媒体解锁监控服务名
@@ -154,7 +161,12 @@ install_warp() {
     echo "检测到架构: $ARCH -> 下载 wgcf_${WGCF_ARCH}"
 
     color_echo green "=== 获取 wgcf 最新版本并下载 ==="
-    WGCF_VER=$(curl -s https://api.github.com/repos/ViRb3/wgcf/releases/latest | grep tag_name | cut -d '"' -f4)
+    WGCF_VER=$(curl -s https://api.github.com/repos/ViRb3/wgcf/releases/latest | jq -r '.tag_name // empty')
+    if [[ -z "$WGCF_VER" ]]; then
+        color_echo red "获取 wgcf 最新版本失败，请检查网络是否能访问 GitHub API。"
+        read -p "按回车返回菜单..."
+        return
+    fi
     FILE="wgcf_${WGCF_VER#v}_linux_${WGCF_ARCH}"
     URL="https://github.com/ViRb3/wgcf/releases/download/${WGCF_VER}/${FILE}"
     echo "正在下载 $URL"
