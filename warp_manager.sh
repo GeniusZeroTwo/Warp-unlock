@@ -18,7 +18,7 @@ STREAM_SERVICE_NAME="warp-stream-monitor.service"
 # 统一设置 Netflix 新加坡独占影片 ID
 NETFLIX_SG_ID="81215567"
 # 脚本自身的远程更新地址（用于本地快捷指令初始化）
-SCRIPT_URL="https://raw.githubusercontent.com/Geniusmmc/Warp-unlock/main/warp_manager.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/geniuszerotwo/warp-unlock/main/warp_manager.sh"
 # WARP 独立配置目录
 WGCF_DIR="/etc/wireguard/wgcf"
 
@@ -541,7 +541,7 @@ sudo tee /usr/local/bin/02 > /dev/null <<'EOF'
 #!/bin/bash
 if [ ! -f /usr/local/bin/warp_manager.sh ]; then
     echo "本地未找到 warp_manager.sh，正在自动重新下载..."
-    curl -fsSL "https://raw.githubusercontent.com/Geniusmmc/Warp-unlock/main/warp_manager.sh" -o /usr/local/bin/warp_manager.sh
+    curl -fsSL "https://raw.githubusercontent.com/geniuszerotwo/warp-unlock/main/warp_manager.sh" -o /usr/local/bin/warp_manager.sh
     chmod +x /usr/local/bin/warp_manager.sh
 fi
 bash /usr/local/bin/warp_manager.sh
