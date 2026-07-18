@@ -63,25 +63,28 @@ check_warp_status() {
         status="$(color_echo red "未运行 ❌")"
     fi
 
-    # IPv4 检测
-    ipv4_info=$(curl -4 -s --max-time 5 "http://ip-api.com/json/?fields=query,org,country" || echo "")
-    if [[ -n "$ipv4_info" && "$ipv4_info" != *"fail"* ]]; then
-        ipv4=$(echo "$ipv4_info" | jq -r '.query // "不可用"')
-        isp4=$(echo "$ipv4_info" | jq -r '.org // "未知服务商"')
-        country4=$(echo "$ipv4_info" | jq -r '.country // "未知地区"')
+    # 检查 jq 是否安装
+    if ! command -v jq &> /dev/null; then
+        ipv4="$(color_echo yellow "未安装 jq，请使用菜单 [1] 优先安装")"
+        isp4="未知"
+        country4="未知"
+        ipv6="$(color_echo yellow "未安装 jq")"
+        isp6="未知"
+        country6="未知"
     else
-        ipv4="不可用"
-        isp4="未知服务商"
-        country4="未知地区"
-    fi
+        # IPv4 检测
+        ipv4_info=$(curl -4 -s --max-time 5 "http://ip-api.com/json/?fields=query,org,country" || echo "")
+        if [[ -n "$ipv4_info" && "$ipv4_info" != *"fail"* ]]; then
+            ipv4=$(echo "$ipv4_info" | jq -r '.query // "不可用"')
+            isp4=$(echo "$ipv4_info" | jq -r '.org // "未知服务商"')
+            country4=$(echo "$ipv4_info" | jq -r '.country // "未知地区"')
+        else
+            ipv4="不可用"
+            isp4="未知服务商"
+            country4="未知地区"
+        fi
 
-    # IPv6 检测（自动切换 API）
-    ipv6_info=$(curl -6 -s --max-time 5 "http://ip-api.com/json/?fields=query,org,country" || echo "")
-    if [[ -n "$ipv6_info" && "$ipv6_info" != *"fail"* ]]; then
-        ipv6=$(echo "$ipv6_info" | jq -r '.query // "不可用"')
-        isp6=$(echo "$ipv6_info" | jq -r '.org // "未知服务商"')
-        country6=$(echo "$ipv6_info" | jq -r '.country // "未知地区"')
-    else
+        # IPv6 检测（直接使用 ifconfig.co 确保原生支持 IPv6 解析）
         ipv6_info=$(curl -6 -s --max-time 5 "https://ifconfig.co/json" || echo "")
         if [[ -n "$ipv6_info" && "$ipv6_info" != *"error"* ]]; then
             ipv6=$(echo "$ipv6_info" | jq -r '.ip // "不可用"')
@@ -229,12 +232,12 @@ enable_auto_restart() {
     fi
 
     color_echo green "=== 开启 WARP 接口异常检测并自动重启（间隔 ${interval} 秒） ==="
-    sudo bash -c "cat > /usr/local/bin/warp-monitor.sh" <<EOF
+    sudo tee /usr/local/bin/warp-monitor.sh > /dev/null <<EOF
 #!/bin/bash
 while true; do
     if ! ip link show warp >/dev/null 2>&1 || ! curl -6 -s --max-time 5 https://ip.gs >/dev/null; then
         echo "\$(date) 检测到 WARP 异常，正在重启接口..."
-        wg-quick down warp 2>/dev/null
+        wg-quick down warp 2>/dev/null || true
         wg-quick up warp
     fi
     sleep ${interval}
@@ -242,7 +245,7 @@ done
 EOF
     sudo chmod +x /usr/local/bin/warp-monitor.sh
 
-    sudo bash -c "cat > /etc/systemd/system/$SERVICE_NAME" <<EOF
+    sudo tee /etc/systemd/system/$SERVICE_NAME > /dev/null <<EOF
 [Unit]
 Description=WARP 接口监控与自动重启
 After=network.target
@@ -293,7 +296,7 @@ enable_stream_monitor() {
         fi
     fi
 
-    sudo bash -c "cat > /usr/local/bin/warp-stream-monitor.sh" <<EOF
+    sudo tee /usr/local/bin/warp-stream-monitor.sh > /dev/null <<EOF
 #!/bin/bash
 # WARP 流媒体解锁检测脚本（所有请求通过 \$NIC 发出）
 IFACE="warp"
@@ -471,7 +474,7 @@ done
 EOF
     sudo chmod +x /usr/local/bin/warp-stream-monitor.sh
 
-    sudo bash -c "cat > /etc/systemd/system/$STREAM_SERVICE_NAME" <<EOF
+    sudo tee /etc/systemd/system/$STREAM_SERVICE_NAME > /dev/null <<EOF
 [Unit]
 Description=WARP 流媒体解锁检测（仅 IPv6）
 After=network.target
@@ -507,27 +510,29 @@ disable_stream_monitor() {
 
 # 优先创建本地脚本备份，减少依赖网络拉取
 if [ ! -f /usr/local/bin/warp_manager.sh ]; then
-    if [[ -f "$0" ]]; then
-        sudo cp "$0" /usr/local/bin/warp_manager.sh
+    SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
+    if [[ -f "$SCRIPT_PATH" && "$SCRIPT_PATH" != "/usr/local/bin/warp_manager.sh" ]]; then
+        sudo cp "$SCRIPT_PATH" /usr/local/bin/warp_manager.sh
     else
         sudo curl -fsSL "$SCRIPT_URL" -o /usr/local/bin/warp_manager.sh
     fi
-    sudo chmod +x /usr/local/bin/warp_manager.sh
+    
+    if [ -s /usr/local/bin/warp_manager.sh ]; then
+        sudo chmod +x /usr/local/bin/warp_manager.sh
+    else
+        color_echo red "无法将脚本复制或下载到 /usr/local/bin/warp_manager.sh，请检查网络或文件路径。"
+        sudo rm -f /usr/local/bin/warp_manager.sh
+    fi
 fi
 
-if [ ! -f /usr/local/bin/02 ]; then
+if [ -f /usr/local/bin/warp_manager.sh ] && [ ! -f /usr/local/bin/02 ]; then
     color_echo yellow "正在创建快捷命令 '02'..."
-    sudo bash -c "echo '#!/bin/bash' > /usr/local/bin/02"
-    sudo bash -c "echo 'bash /usr/local/bin/warp_manager.sh' >> /usr/local/bin/02"
+    sudo tee /usr/local/bin/02 > /dev/null <<'EOF'
+#!/bin/bash
+bash /usr/local/bin/warp_manager.sh
+EOF
     sudo chmod +x /usr/local/bin/02
     color_echo green "快捷命令已创建，之后可直接输入 02 打开 WARP 管理菜单（纯本地执行更快速）"
-fi
-
-if systemctl list-units --type=service | grep -q "$STREAM_SERVICE_NAME"; then
-    if systemctl is-active --quiet "$STREAM_SERVICE_NAME"; then
-        # 仅当后台存在检测进程变动时可选进行 reload
-        :
-    fi
 fi
 
 # 主循环
