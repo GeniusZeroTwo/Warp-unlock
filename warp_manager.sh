@@ -520,32 +520,29 @@ disable_stream_monitor() {
 
 # --- 主逻辑 ---
 
-# 优先创建本地脚本备份，减少依赖网络拉取
-if [ ! -f /usr/local/bin/warp_manager.sh ]; then
-    SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
-    if [[ -f "$SCRIPT_PATH" && "$SCRIPT_PATH" != "/usr/local/bin/warp_manager.sh" ]]; then
-        sudo cp "$SCRIPT_PATH" /usr/local/bin/warp_manager.sh
-    else
-        sudo curl -fsSL "$SCRIPT_URL" -o /usr/local/bin/warp_manager.sh
-    fi
-    
-    if [ -s /usr/local/bin/warp_manager.sh ]; then
-        sudo chmod +x /usr/local/bin/warp_manager.sh
-    else
-        color_echo red "无法将脚本复制或下载到 /usr/local/bin/warp_manager.sh，请检查网络或文件路径。"
-        sudo rm -f /usr/local/bin/warp_manager.sh
-    fi
+# 优先更新本地脚本备份，减少依赖网络拉取
+SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
+if [[ -f "$SCRIPT_PATH" && "$SCRIPT_PATH" != "/usr/local/bin/warp_manager.sh" ]]; then
+    sudo cp -f "$SCRIPT_PATH" /usr/local/bin/warp_manager.sh
+elif [[ "$SCRIPT_PATH" != "/usr/local/bin/warp_manager.sh" ]]; then
+    sudo curl -fsSL "$SCRIPT_URL" -o /usr/local/bin/warp_manager.sh
 fi
 
-if [ -f /usr/local/bin/warp_manager.sh ] && [ ! -f /usr/local/bin/02 ]; then
-    color_echo yellow "正在创建快捷命令 '02'..."
-    sudo tee /usr/local/bin/02 > /dev/null <<'EOF'
+if [ -s /usr/local/bin/warp_manager.sh ]; then
+    sudo chmod +x /usr/local/bin/warp_manager.sh
+else
+    color_echo red "无法将脚本复制或下载到 /usr/local/bin/warp_manager.sh，请检查网络或文件路径。"
+    sudo rm -f /usr/local/bin/warp_manager.sh
+fi
+
+# 始终创建/更新 02 快捷命令
+color_echo yellow "正在配置快捷命令 '02'..."
+sudo tee /usr/local/bin/02 > /dev/null <<'EOF'
 #!/bin/bash
 bash /usr/local/bin/warp_manager.sh
 EOF
-    sudo chmod +x /usr/local/bin/02
-    color_echo green "快捷命令已创建，之后可直接输入 02 打开 WARP 管理菜单（纯本地执行更快速）"
-fi
+sudo chmod +x /usr/local/bin/02
+color_echo green "快捷命令 '02' 已配置，之后可直接输入 02 打开 WARP 管理菜单！"
 
 # 主循环
 while true; do
