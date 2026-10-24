@@ -1,0 +1,12 @@
+# Sensitive WARP / WireGuard credentials & configs
+wgcf-account.toml
+wgcf-profile.conf
+warp.conf
+warp_stream.conf
+disney_cookies.txt
+
+# Binary & OS artifacts
+wgcf
+.DS_Store
+*.bak
+*.tmp

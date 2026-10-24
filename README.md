@@ -37,6 +37,8 @@ wget -qO- https://raw.githubusercontent.com/geniuszerotwo/warp-unlock/main/warp_
   - 保持系统内网 DNS 解析，杜绝云平台内网元数据及内网镜像源失效。
 - 🔑 **WARP+ 密钥便捷管理**：
   - 支持直接在菜单绑定/更新 License Key，自动向 Cloudflare 远端同步激活并平滑重载接口。
+- 🤖 **Hysteria 2 (hy2) AI 与流媒体一键分流 (GeoSite)**：
+  - 自动拉取最新 `geosite.dat` 并注入 AI（`geosite:category-ai-!cn` / `openai` / `anthropic` / `google-gemini` 等）与流媒体（`geosite:netflix` / `disney` / `primevideo` / `amazon` / `youtube`）规则至 Hysteria 2 `config.yaml` 强制走 WARP IPv6 出站，普通流量保留原生 IPv4 优先，支持失败自动回滚。
 - 🖥️ **全架构 & 多发行版支持**：
   - 架构：`x86_64` (amd64)、`aarch64`/`arm64`、`armv7`、`i386`。
   - 发行版：Debian、Ubuntu、CentOS、RHEL、AlmaLinux、Rocky Linux、openSUSE、Alpine 等。
@@ -53,6 +55,7 @@ wget -qO- https://raw.githubusercontent.com/geniuszerotwo/warp-unlock/main/warp_
 ------------------------------------------------------------
  接口异常保活服务: 未运行 ❌
  流媒体解锁监控服务: 运行中 ✅
+ Hysteria2 分流状态: 已启用 (AI + 流媒体 -> IPv6) ✅
 ============================================================
                Cloudflare WARP 管理菜单
 ============================================================
@@ -73,8 +76,10 @@ wget -qO- https://raw.githubusercontent.com/geniuszerotwo/warp-unlock/main/warp_
  10) 停止接口异常保活监控
  11) 配置 / 测试 Telegram 告警推送
  12) 查看 / 绑定 WARP+ 授权密钥 (License Key)
+ 13) 一键配置 Hysteria2 (hy2) AI 与流媒体分流走 IPv6
+  r) 立即刷新看板 IP 状态缓存
 
-  0. 退出
+  0) 退出
 ============================================================
 ```
 
