@@ -955,6 +955,7 @@ uninstall_script() {
     color_echo red "=== 卸载脚本和快捷命令 ==="
     stop_and_remove_service "$SERVICE_NAME" "/usr/local/bin/warp-monitor.sh"
     stop_and_remove_service "$STREAM_SERVICE_NAME" "/usr/local/bin/warp-stream-monitor.sh"
+    rm -f /etc/cron.d/warp-hy2-geosite /etc/periodic/weekly/warp-hy2-geosite /var/log/warp-geosite-update.log
     rm -f /usr/local/bin/02
     rm -f /usr/local/bin/warp_manager.sh
     rm -f "$STREAM_CONF" "$KEEPALIVE_CONF" "$COOKIE_CACHE"
@@ -1365,29 +1366,67 @@ ensure_hy2_geosite() {
     local url_loyal="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
     local url_v2fly="https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat"
 
-    if curl -fsL --max-time 20 "$url_loyal" -o "$tmp_geo" 2>/dev/null && [[ -s "$tmp_geo" ]]; then
+    if curl -fsL --max-time 25 "$url_loyal" -o "$tmp_geo" 2>/dev/null && [[ $(wc -c < "$tmp_geo" 2>/dev/null || echo 0) -gt 102400 ]]; then
         :
-    elif curl -fsL --max-time 20 "${MIRROR_PREFIX}${url_loyal}" -o "$tmp_geo" 2>/dev/null && [[ -s "$tmp_geo" ]]; then
+    elif curl -fsL --max-time 25 "${MIRROR_PREFIX}${url_loyal}" -o "$tmp_geo" 2>/dev/null && [[ $(wc -c < "$tmp_geo" 2>/dev/null || echo 0) -gt 102400 ]]; then
         :
-    elif curl -fsL --max-time 20 "$url_v2fly" -o "$tmp_geo" 2>/dev/null && [[ -s "$tmp_geo" ]]; then
+    elif curl -fsL --max-time 25 "$url_v2fly" -o "$tmp_geo" 2>/dev/null && [[ $(wc -c < "$tmp_geo" 2>/dev/null || echo 0) -gt 102400 ]]; then
         :
-    elif curl -fsL --max-time 20 "${MIRROR_PREFIX}${url_v2fly}" -o "$tmp_geo" 2>/dev/null && [[ -s "$tmp_geo" ]]; then
+    elif curl -fsL --max-time 25 "${MIRROR_PREFIX}${url_v2fly}" -o "$tmp_geo" 2>/dev/null && [[ $(wc -c < "$tmp_geo" 2>/dev/null || echo 0) -gt 102400 ]]; then
         :
     else
         rm -f "$tmp_geo"
-        color_echo yellow "⚠️ 预下载 geosite.dat 超时，将交由 Hysteria 2 启动时自动拉取。"
+        color_echo yellow "⚠️ 预下载 geosite.dat 超时，将保留现有文件或交由 Hysteria 2 启动时自动拉取。"
         return 1
     fi
 
     mkdir -p "$conf_dir"
     mv -f "$tmp_geo" "$geosite_file"
     chmod 644 "$geosite_file"
-    if [[ -d /var/lib/hysteria ]]; then
+    if [[ -d /var/lib/hysteria && "$conf_dir" != "/var/lib/hysteria" ]]; then
         cp -f "$geosite_file" /var/lib/hysteria/geosite.dat 2>/dev/null || true
         chmod 644 /var/lib/hysteria/geosite.dat 2>/dev/null || true
     fi
-    color_echo green "✅ geosite.dat 规则库已就绪: $geosite_file"
+    color_echo green "✅ geosite.dat 规则库已更新就绪: $geosite_file"
     return 0
+}
+
+# 辅助：配置每周自动更新 geosite.dat 定时任务
+setup_geosite_auto_update() {
+    if [[ -d /etc/cron.d ]]; then
+        cat > /etc/cron.d/warp-hy2-geosite <<'EOF'
+# 每周一凌晨 04:30 自动更新 Hysteria 2 的 geosite.dat 并平滑重载服务
+30 4 * * 1 root /usr/local/bin/warp_manager.sh --update-geosite >/var/log/warp-geosite-update.log 2>&1
+EOF
+        chmod 644 /etc/cron.d/warp-hy2-geosite
+    elif [[ -d /etc/periodic/weekly ]]; then
+        cat > /etc/periodic/weekly/warp-hy2-geosite <<'EOF'
+#!/bin/sh
+/usr/local/bin/warp_manager.sh --update-geosite >/var/log/warp-geosite-update.log 2>&1
+EOF
+        chmod +x /etc/periodic/weekly/warp-hy2-geosite
+    fi
+}
+
+# 辅助：移除每周自动更新 geosite.dat 定时任务
+remove_geosite_auto_update() {
+    rm -f /etc/cron.d/warp-hy2-geosite /etc/periodic/weekly/warp-hy2-geosite
+}
+
+# 后台定时更新 geosite.dat 入口函数
+run_geosite_auto_update() {
+    local hy2_conf hy2_dir
+    hy2_conf=$(find_hy2_config)
+    [[ ! -f "$hy2_conf" ]] && exit 0
+    hy2_dir=$(dirname "$hy2_conf")
+    echo "$(date '+%F %T') [WARP-GEOSITE] 开始执行每周 geosite.dat 自动更新..."
+    if ensure_hy2_geosite "$hy2_dir" "yes"; then
+        local bak_file="${hy2_conf}.bak.auto"
+        cp -a "$hy2_conf" "$bak_file"
+        restart_and_verify_hy2 "$hy2_conf" "$bak_file"
+        rm -f "$bak_file"
+        echo "$(date '+%F %T') [WARP-GEOSITE] 自动更新并重载 Hysteria 2 完成。"
+    fi
 }
 
 # 13. 一键配置 Hysteria 2 (hy2) AI 与流媒体分流走 IPv6 (基于 geosite)
@@ -1412,8 +1451,13 @@ config_hy2_ai_routing() {
 
     local hy2_dir
     hy2_dir=$(dirname "$hy2_conf")
+    local auto_update_status="未启用 ❌"
+    if [[ -f /etc/cron.d/warp-hy2-geosite || -f /etc/periodic/weekly/warp-hy2-geosite ]]; then
+        auto_update_status="已开启 (每周一 04:30 自动更新) ✅"
+    fi
 
-    echo "目标配置文件: $(color_echo cyan "$hy2_conf")"
+    echo "目标配置文件:   $(color_echo cyan "$hy2_conf")"
+    echo "规则库自动更新: $auto_update_status"
     if ! ip link show warp >/dev/null 2>&1; then
         color_echo yellow "⚠️ 注意：当前未检测到运行中的 warp 接口，建议先通过菜单 [1] 安装/启动 WARP IPv6。"
     fi
@@ -1423,7 +1467,7 @@ config_hy2_ai_routing() {
     echo " 3) 仅开启流媒体平台 (Netflix / 迪士尼 Disney+ / 亚马逊 Prime / YouTube) 分流走 IPv6"
     echo " 4) 移除已添加的 Hysteria 2 IPv6 分流规则 (恢复默认直连)"
     echo " 5) 查看当前配置文件中的 outbounds 与 acl 规则"
-    echo " 6) 手动更新 geosite.dat 规则库文件"
+    echo " 6) 立即手动更新 geosite.dat 规则库文件"
     echo " 0) 返回主菜单"
     echo "------------------------------------------------------------"
     read -r -p "请选择操作 [0-6, 默认 1]: " hy_op
@@ -1432,6 +1476,7 @@ config_hy2_ai_routing() {
     case "$hy_op" in
         1|2|3)
             ensure_hy2_geosite "$hy2_dir" "no"
+            setup_geosite_auto_update
 
             local bak_file="${hy2_conf}.bak.$(date +%s)"
             cp -a "$hy2_conf" "$bak_file"
@@ -1464,6 +1509,7 @@ EOF
             if [[ -s "${hy2_dir}/geosite.dat" ]]; then
                 echo "  geosite: ${hy2_dir}/geosite.dat" >> "$tmp_clean"
             fi
+            echo "  geoUpdateInterval: 168h" >> "$tmp_clean"
             echo "  inline:" >> "$tmp_clean"
 
             # 若用户原先有其他非 WARP 自定义 ACL 规则，优先保留在最前面
@@ -1505,6 +1551,7 @@ EOF
             mv -f "$tmp_clean" "$hy2_conf"
             rm -f "$tmp_custom"
             color_echo green "✅ 已成功将 GeoSite IPv6 分流规则写入 $hy2_conf (原配置已备份至 $bak_file)"
+            color_echo green "✅ 已启用每周自动更新 geosite.dat 定时任务 (每周一 04:30 自动拉取并平滑重载)"
             restart_and_verify_hy2 "$hy2_conf" "$bak_file"
             read -r -p "按回车返回菜单..."
             ;;
@@ -1530,7 +1577,8 @@ EOF
 
             mv -f "$tmp_clean" "$hy2_conf"
             rm -f "$tmp_custom"
-            color_echo green "✅ 已移除 Hysteria 2 中的 WARP IPv6 分流配置！"
+            remove_geosite_auto_update
+            color_echo green "✅ 已移除 Hysteria 2 中的 WARP IPv6 分流配置与自动更新任务！"
             restart_and_verify_hy2 "$hy2_conf" "$bak_file"
             read -r -p "按回车返回菜单..."
             ;;
@@ -1565,6 +1613,10 @@ case "${1:-}" in
         ;;
     --daemon-keepalive)
         run_keepalive_daemon "${2:-60}"
+        exit 0
+        ;;
+    --update-geosite)
+        run_geosite_auto_update
         exit 0
         ;;
 esac
